@@ -148,12 +148,54 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='if True, dont scale embeddings')
         # fmt: on
 
+        # beg 20191115 add arguments for multi-hop attention
+        parser.add_argument('--encoder-attn-type', default='vanilla',
+                            help='specify the type of attention used in encoder. Options are vanilla|MHDA')
+        parser.add_argument('--encoder-spec-attn-layers', default='',
+                            help='specify the layer ids where special attention will be used. All ids should be splited by'
+                                 'English comma like: 0,4,5')
+        parser.add_argument('--decoder-attn-type', default='vanilla',
+                            help='specify the type of self attention used in decoder. Options are vanilla|MHDA')
+        parser.add_argument('--decoder-spec-attn-layers', default='',
+                            help='specify the layer ids where special attention will be used. All ids should be splited by'
+                                 'English comma like: 0,4,5')
+        parser.add_argument('--encdec-attn-type', default='vanilla',
+                            help='specify the type of encoder-decoder attention. Options are vanilla|MHDA')
+        parser.add_argument('--encdec-spec-attn-layers', default='',
+                            help='specify the layer ids where special attention will be used. All ids should be splited by'
+                                 'English comma like: 0,4,5')
+        # end 20191115
+
     @classmethod
     def build_model(cls, args, task):
         """Build a new model instance."""
 
         # make sure all arguments are present in older models
         base_architecture(args)
+
+        # beg 20191115 check validity of multi-hop arguments
+        VALID_ATTN_TYPES = ['vanilla', 'MHDA']
+        if args.encoder_attn_type not in VALID_ATTN_TYPES:
+            raise ValueError('Invalid encoder attention type [{}]'.format(args.encoder_attn_type))
+        if args.decoder_attn_type not in VALID_ATTN_TYPES:
+            raise ValueError('Invalid decoder attention type [{}]'.format(args.decoder_attn_type))
+        if args.encdec_attn_type not in VALID_ATTN_TYPES:
+            raise ValueError('Invalid encoder-decoder attention type [{}]'.format(args.encdec_attn_type))
+
+        def check_layer_id(layer_ids):
+            for layer_id in layer_ids:
+                if layer_id == '': continue
+                try:
+                    layer_id = int(layer_id)
+                except Exception as e:
+                    raise ValueError('Invalid layer id [{}]'.format(layer_id))
+                if layer_id < 0 or layer_id > args.encoder_layers - 1:
+                    raise ValueError('Invalid layer id [{}]'.format(layer_id))
+
+        check_layer_id(args.encoder_spec_attn_layers.split(','))
+        check_layer_id(args.decoder_spec_attn_layers.split(','))
+        check_layer_id(args.encdec_spec_attn_layers.split(','))
+        # end 20191115
 
         if args.encoder_layers_to_keep:
             args.encoder_layers = len(args.encoder_layers_to_keep.split(","))
@@ -323,7 +365,7 @@ class TransformerEncoder(FairseqEncoder):
 
         self.layers = nn.ModuleList([])
         self.layers.extend([
-            TransformerEncoderLayer(args)
+            TransformerEncoderLayer(args, layer_id=i)
             for i in range(args.encoder_layers)
         ])
 
@@ -511,8 +553,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
         self.layers = nn.ModuleList([])
         self.layers.extend([
-            TransformerDecoderLayer(args, no_encoder_attn)
-            for _ in range(args.decoder_layers)
+            TransformerDecoderLayer(args, no_encoder_attn, layer_id=i)
+            for i in range(args.decoder_layers)
         ])
 
         self.adaptive_softmax = None

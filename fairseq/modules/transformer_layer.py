@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from fairseq import utils
-from fairseq.modules import LayerNorm, MultiheadAttention
+from fairseq.modules import LayerNorm, MultiheadAttention, MultiHopDependentAttention
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -25,13 +25,29 @@ class TransformerEncoderLayer(nn.Module):
         args (argparse.Namespace): parsed command-line arguments
     """
 
-    def __init__(self, args):
+    def __init__(self, args, layer_id=-1):
         super().__init__()
         self.embed_dim = args.encoder_embed_dim
-        self.self_attn = MultiheadAttention(
-            self.embed_dim, args.encoder_attention_heads,
-            dropout=args.attention_dropout, self_attention=True
-        )
+
+        # beg 20191115 multi-hop attention configuration in layer
+        self.layer_id = layer_id
+        self.attn_type = args.encoder_attn_type    # set as an class attribute considering to use the value in forward method
+        self.spec_layers = [int(i) for i in args.encoder_spec_attn_layers.split(',') if i != '']
+        if self.attn_type == 'MHDA' and self.layer_id in self.spec_layers:
+            self.self_attn = MultiHopDependentAttention(
+                self.embed_dim, args.encoder_attention_heads,
+                dropout=args.attention_dropout, self_attention=True
+            )
+            print('Self Attention [@Encoder Layer-{}] is MHDA.'.format(self.layer_id))
+        else:
+            self.self_attn = MultiheadAttention(
+                self.embed_dim, args.encoder_attention_heads,
+                dropout=args.attention_dropout, self_attention=True
+            )
+            print('Self Attention [@Encoder Layer-{}] is vanilla multi-head attention.'.format(self.layer_id))
+        # end 20191115
+
+
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout = args.dropout
         self.activation_fn = utils.get_activation_fn(
@@ -132,18 +148,38 @@ class TransformerDecoderLayer(nn.Module):
             (default: False).
     """
 
-    def __init__(self, args, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False):
+    def __init__(self, args, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False, layer_id=-1):
         super().__init__()
         self.embed_dim = args.decoder_embed_dim
         self.cross_self_attention = getattr(args, 'cross_self_attention', False)
-        self.self_attn = MultiheadAttention(
-            embed_dim=self.embed_dim,
-            num_heads=args.decoder_attention_heads,
-            dropout=args.attention_dropout,
-            add_bias_kv=add_bias_kv,
-            add_zero_attn=add_zero_attn,
-            self_attention=not self.cross_self_attention,
-        )
+
+        # beg 20191115 multi-hop attention configuration in layer
+        self.layer_id = layer_id
+        self.self_attn_type = args.decoder_attn_type
+        self.self_spec_layers = [int(i) for i in args.decoder_spec_attn_layers.split(',') if i != '']
+        if self.self_attn_type == 'MHDA' and self.layer_id in self.self_spec_layers:
+            self.self_attn = MultiHopDependentAttention(
+                embed_dim=self.embed_dim,
+                num_heads=args.decoder_attention_heads,
+                dropout=args.attention_dropout,
+                add_bias_kv=add_bias_kv,
+                add_zero_attn=add_zero_attn,
+                self_attention=True
+            )
+            print('Self Attention [@Decoder Layer-{}] is MHDA.'.format(self.layer_id))
+        else:
+            self.self_attn = MultiheadAttention(
+                embed_dim=self.embed_dim,
+                num_heads=args.decoder_attention_heads,
+                dropout=args.attention_dropout,
+                add_bias_kv=add_bias_kv,
+                add_zero_attn=add_zero_attn,
+                self_attention=not self.cross_self_attention,
+            )
+            print('Self Attention @[Decoder Layer-{}] is vanilla multi-head attention.'.format(self.layer_id))
+
+        # end 20191115
+
         self.dropout = args.dropout
         self.activation_fn = utils.get_activation_fn(
             activation=getattr(args, 'activation_fn', 'relu')
@@ -164,14 +200,32 @@ class TransformerDecoderLayer(nn.Module):
             self.encoder_attn = None
             self.encoder_attn_layer_norm = None
         else:
-            self.encoder_attn = MultiheadAttention(
-                self.embed_dim,
-                args.decoder_attention_heads,
-                kdim=getattr(args, 'encoder_embed_dim', None),
-                vdim=getattr(args, 'encoder_embed_dim', None),
-                dropout=args.attention_dropout,
-                encoder_decoder_attention=True,
-            )
+            # beg 20191115 multi-hop attention configuration in layer
+            self.encdec_attn_type = args.encdec_attn_type
+            self.encdec_spec_layers = [int(i) for i in args.encdec_spec_attn_layers.split(',') if i != '']
+
+            if self.encdec_attn_type == 'MHDA' and self.layer_id in self.encdec_spec_layers:
+                self.encoder_attn = MultiHopDependentAttention(
+                    self.embed_dim,
+                    args.decoder_attention_heads,
+                    kdim=getattr(args, 'encoder_embed_dim', None),
+                    vdim=getattr(args, 'encoder_embed_dim', None),
+                    dropout=args.attention_dropout,
+                    encoder_decoder_attention=True,
+                )
+                print('Encoder-Decoder Attention [@Decoder Layer-{}] is MHDA.'.format(self.layer_id))
+            else:
+                self.encoder_attn = MultiheadAttention(
+                    self.embed_dim,
+                    args.decoder_attention_heads,
+                    kdim=getattr(args, 'encoder_embed_dim', None),
+                    vdim=getattr(args, 'encoder_embed_dim', None),
+                    dropout=args.attention_dropout,
+                    encoder_decoder_attention=True,
+                )
+                print('Encoder-Decoder Attention [@Decoder Layer-{}] is vanilla multi-head attention.'.format(self.layer_id))
+            # end 20191115
+
             self.encoder_attn_layer_norm = LayerNorm(self.embed_dim, export=export)
 
         self.fc1 = Linear(self.embed_dim, args.decoder_ffn_embed_dim)
