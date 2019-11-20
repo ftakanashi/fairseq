@@ -271,7 +271,7 @@ class MultiHopDependentAttention(nn.Module):
         assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
 
         # beg 20191115 forward process for multi-hop attention
-        E = self.v_b(nn.functional.tanh(self.W_b(q) + self.U_b(attn)))
+        E = self.v_b(torch.tanh(self.W_b(q) + self.U_b(attn)))    # 20191120 torch.nn.functional.tanh -> torch.tanh
         E = E.view(bsz, self.num_heads, E.shape[-2], E.shape[-1])
         beta = torch.nn.functional.softmax(E, dim=1)
         beta = beta.view(bsz * self.num_heads, beta.shape[-2], beta.shape[-1])
